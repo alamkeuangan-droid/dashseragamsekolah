@@ -372,7 +372,7 @@ function readDbRaw_() {
  *   [namaSiswa, jenisKelamin, jenjang, namaSekolah, kecamatan, jalur, ukBaju, ukCelana]
  */
 function getDashboardData(forceRefresh) {
-  const cacheKey = 'dashboard_data_v4';
+  const cacheKey = 'dashboard_data_v5';
   if (CONFIG.CACHE_SECONDS > 0 && !forceRefresh) {
     const cached = cacheRead_(cacheKey);
     if (cached) return cached;
