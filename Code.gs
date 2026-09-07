@@ -154,6 +154,30 @@ function normalize_(v) {
   return String(v == null ? '' : v).trim();
 }
 
+/** Normalisasi khusus NIK: NIK adalah 16 digit angka, tapi Google Sheets
+ *  sering menyimpannya sbg tipe Number (bukan Text) yang berisiko salah
+ *  baca (notasi ilmiah / dibulatkan / berakhiran ".0"). Fungsi ini
+ *  menyeragamkan NIK dari kedua tipe (Number maupun Text) menjadi string
+ *  digit-only apa adanya, supaya perbandingan "sama/tidak" antar baris
+ *  akurat terlepas dari format aslinya di sheet. */
+function normalizeNik_(v) {
+  if (v === null || v === undefined || v === '') return '';
+  if (typeof v === 'number') {
+    if (!isFinite(v)) return '';
+    // NIK selalu bilangan bulat: buang sisa desimal akibat konversi float.
+    return String(Math.round(v));
+  }
+  let s = String(v).trim();
+  if (!s) return '';
+  // Kadang nilai berupa teks notasi ilmiah, mis. "3.173E+15".
+  if (/^-?\d+(\.\d+)?[eE][+-]?\d+$/.test(s)) {
+    const num = Number(s);
+    if (isFinite(num)) s = String(Math.round(num));
+  }
+  // Buang segala karakter selain digit (spasi, strip, apostrof, dsb).
+  return s.replace(/[^0-9]/g, '');
+}
+
 /** Kunci "canonical" (huruf besar semua + spasi ganda dirapikan) dipakai
  *  untuk MENYAMAKAN nilai yang sebenarnya sama tapi beda ketikan, mis.
  *  "Zonasi", "ZONASI ", "zonasi" -> semuanya jadi kunci "ZONASI". Tanpa ini,
@@ -264,7 +288,7 @@ function readHasilRaw_() {
       npsn: npsn,
       namaSekolah: normalize_(row[HASIL_COLS.NAMA_SEKOLAH]),
       namaSiswa: namaSiswa,
-      nik: normalize_(row[HASIL_COLS.NIK]),
+      nik: normalizeNik_(row[HASIL_COLS.NIK]),
       nisn: normalize_(row[HASIL_COLS.NISN]),
       jenisKelamin: normalize_(row[HASIL_COLS.JENIS_KELAMIN]),
       ukBaju: normalize_(row[HASIL_COLS.UK_BAJU]),
@@ -629,6 +653,51 @@ function getSiswaList(filters) {
   });
 
   return list;
+}
+
+// ----------------------------------------------------------------------
+// DIAGNOSTIK NIK DUPLIKAT (jalankan manual dari editor Apps Script:
+// pilih fungsi "debugCekNik" di dropdown atas, klik Run, lalu buka
+// View > Logs / Execution log untuk melihat hasilnya). Fungsi ini TIDAK
+// dipakai oleh UI web, aman dijalankan kapan saja untuk troubleshooting.
+// ----------------------------------------------------------------------
+function debugCekNik() {
+  const hasil = readHasilRaw_();
+  Logger.log('Total baris terbaca dari sheet HASIL: ' + hasil.length);
+
+  // Tampilkan 5 baris pertama apa adanya (raw sebelum & sesudah normalisasi)
+  // supaya kelihatan jika tipe datanya angka/teks bermasalah.
+  const sh = sheet_(CONFIG.SHEET_HASIL);
+  const startRow = CONFIG.HASIL_HAS_HEADER ? 2 : 1;
+  const sampleCount = Math.min(5, hasil.length);
+  for (let i = 0; i < sampleCount; i++) {
+    const rawCell = sh.getRange(startRow + i, HASIL_COLS.NIK + 1).getValue();
+    Logger.log('Baris ' + (startRow + i) + ' -> raw="' + rawCell + '" (tipe: ' + (typeof rawCell) +
+      ') | setelah normalisasi: "' + normalizeNik_(rawCell) + '"');
+  }
+
+  // Hitung NIK yang muncul >1 kali.
+  const freq = {};
+  hasil.forEach(function (h) {
+    if (!h.nik) return;
+    freq[h.nik] = (freq[h.nik] || 0) + 1;
+  });
+  const dup = Object.keys(freq).filter(function (k) { return freq[k] > 1; });
+  Logger.log('Jumlah baris dengan NIK kosong: ' + hasil.filter(function (h) { return !h.nik; }).length);
+  Logger.log('Jumlah NIK unik terdeteksi: ' + Object.keys(freq).length);
+  Logger.log('Jumlah NIK DUPLIKAT terdeteksi: ' + dup.length);
+  dup.slice(0, 20).forEach(function (nik) {
+    Logger.log('  NIK "' + nik + '" muncul ' + freq[nik] + 'x');
+  });
+  if (dup.length > 20) Logger.log('  ... dan ' + (dup.length - 20) + ' NIK duplikat lainnya.');
+
+  return {
+    totalBaris: hasil.length,
+    nikKosong: hasil.filter(function (h) { return !h.nik; }).length,
+    nikUnik: Object.keys(freq).length,
+    nikDuplikat: dup.length,
+    contohNikDuplikat: dup.slice(0, 20)
+  };
 }
 
 // ----------------------------------------------------------------------
