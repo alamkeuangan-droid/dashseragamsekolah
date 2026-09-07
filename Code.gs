@@ -348,7 +348,7 @@ function readDbRaw_() {
  *   [namaSiswa, jenisKelamin, jenjang, namaSekolah, kecamatan, jalur, ukBaju, ukCelana]
  */
 function getDashboardData(forceRefresh) {
-  const cacheKey = 'dashboard_data_v3';
+  const cacheKey = 'dashboard_data_v4';
   if (CONFIG.CACHE_SECONDS > 0 && !forceRefresh) {
     const cached = cacheRead_(cacheKey);
     if (cached) return cached;
@@ -501,6 +501,43 @@ function getDashboardData(forceRefresh) {
     ];
   });
 
+  // -------- 7) Deteksi siswa dengan NIK ganda/duplikat pada sheet HASIL --------
+  // Baris tanpa NIK (kosong) tidak dianggap "duplikat" satu sama lain.
+  const nikGroups_ = {}; // nik -> array baris hasil dengan NIK tsb
+  hasil.forEach(function (h) {
+    const nik = normalize_(h.nik);
+    if (!nik) return;
+    if (!nikGroups_[nik]) nikGroups_[nik] = [];
+    nikGroups_[nik].push(h);
+  });
+
+  const duplikatNik = Object.keys(nikGroups_)
+    .filter(function (nik) { return nikGroups_[nik].length > 1; })
+    .sort()
+    .map(function (nik) {
+      const rows = nikGroups_[nik];
+      return {
+        nik: nik,
+        jumlah: rows.length,
+        siswa: rows.map(function (h) {
+          return {
+            namaSiswa: h.namaSiswa,
+            jenisKelamin: h.jenisKelamin,
+            jenjang: h.jenjang,
+            namaSekolah: repSekolah_(h.namaSekolah),
+            kecamatan: resolveKecamatan_(h.npsn),
+            jalur: repJalur_(h.jalur),
+            nisn: h.nisn,
+            ukBaju: h.ukBaju,
+            ukCelana: h.ukCelana,
+            status: h.status
+          };
+        })
+      };
+    });
+
+  const totalSiswaDuplikat = duplikatNik.reduce(function (a, g) { return a + g.jumlah; }, 0);
+
   const result = {
     generatedAt: new Date().toISOString(),
     ringkasan: {
@@ -525,7 +562,14 @@ function getDashboardData(forceRefresh) {
     },
     // Urutan field tiap baris: lihat komentar fungsi di atas.
     siswaFields: ['namaSiswa', 'jenisKelamin', 'jenjang', 'namaSekolah', 'kecamatan', 'jalur', 'ukBaju', 'ukCelana'],
-    siswaRows: siswaRows
+    siswaRows: siswaRows,
+    // Daftar NIK yang muncul lebih dari sekali pada sheet Hasil, beserta
+    // seluruh baris siswa yang memakai NIK tsb (utk tab "Duplikat NIK").
+    duplikatNik: duplikatNik,
+    ringkasanDuplikat: {
+      totalNikDuplikat: duplikatNik.length,
+      totalSiswaDuplikat: totalSiswaDuplikat
+    }
   };
 
   if (CONFIG.CACHE_SECONDS > 0) {

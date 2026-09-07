@@ -108,6 +108,10 @@
       background: var(--blue-900); color:#fff; box-shadow: var(--shadow-sm);
     }
     .tab-btn svg{ width:15px; height:15px; flex:0 0 auto; }
+    .dup-badge{
+      background: var(--red-500); color:#fff; font-size:10.5px; font-weight:700;
+      line-height:1; padding:3px 6px; border-radius:999px; min-width:16px; text-align:center;
+    }
     .navbar__actions{ display:flex; align-items:center; gap:8px; }
     .icon-btn{
       width:38px; height:38px; border-radius:11px; border:1px solid var(--border);
@@ -249,6 +253,12 @@
     .badge-kosong{ background:#F1F3F6; color:#5B6672; }
     .badge-neutral{ background: var(--blue-50); color: var(--blue-700); }
 
+    /* Pengelompokan visual baris NIK duplikat (override selang-seling default) */
+    #tableDuplikat tbody tr.dup-row-a{ background: var(--blue-50) !important; }
+    #tableDuplikat tbody tr.dup-row-b{ background: var(--amber-50) !important; }
+    #tableDuplikat tbody tr.dup-row-a:hover, #tableDuplikat tbody tr.dup-row-b:hover{ filter: brightness(0.97); }
+    #tableDuplikat td.dup-nik{ font-weight:700; font-family: monospace; letter-spacing:.02em; }
+
     .progress{ width:90px; height:6px; border-radius:99px; background: var(--blue-50); overflow:hidden; }
     .progress i{ display:block; height:100%; background: var(--blue-500); }
     .progress.over i{ background: var(--red-500); }
@@ -342,6 +352,11 @@
       <button class="tab-btn" data-tab="rekap">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 15l4-6 3 3 5-7"/></svg>
         Rekap SD / SMP
+      </button>
+      <button class="tab-btn" data-tab="duplikat">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="12" height="12" rx="2.5"/><rect x="9" y="9" width="12" height="12" rx="2.5"/></svg>
+        Duplikat NIK
+        <span id="dupBadge" class="dup-badge" style="display:none;">0</span>
       </button>
     </nav>
 
@@ -576,6 +591,63 @@
         <div class="grid-stats" id="rekapCards"></div>
       </section>
 
+      <!-- ======================= TAB: DUPLIKAT NIK ======================= -->
+      <section class="tab-panel" data-panel="duplikat">
+        <div class="page-head">
+          <div class="eyebrow">Validasi Data</div>
+          <h2>Siswa dengan NIK Duplikat</h2>
+          <p>Menampilkan siswa yang NIK-nya tercatat lebih dari satu kali pada sheet <b>Hasil</b>, agar dapat ditelusuri dan diverifikasi kebenarannya.</p>
+        </div>
+
+        <div class="grid-stats" id="duplikatStatCards" style="grid-template-columns: repeat(2, 1fr); max-width:640px;"></div>
+
+        <div class="note" id="duplikatEmptyNote" style="display:none;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+          <span>Tidak ditemukan NIK duplikat pada data saat ini. Semua NIK pada sheet Hasil unik. 🎉</span>
+        </div>
+
+        <div class="card" id="duplikatCard">
+          <div class="card__head">
+            <div>
+              <h3 id="duplikatCount">0 NIK duplikat ditemukan</h3>
+              <div class="sub">Baris dengan NIK yang sama diberi warna latar sama agar mudah dibandingkan.</div>
+            </div>
+            <div class="filters" style="margin:0;">
+              <div class="field" style="min-width:240px;">
+                <label>Cari NIK / Nama / Sekolah</label>
+                <input type="text" id="searchDuplikat" placeholder="Ketik NIK, nama siswa, atau nama sekolah…">
+              </div>
+            </div>
+          </div>
+          <div class="btn-row no-print">
+            <button class="btn btn-accent" id="btnExportDuplikat">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg>
+              Unduh Excel (Daftar NIK Duplikat)
+            </button>
+          </div>
+          <div class="table-wrap">
+            <table id="tableDuplikat">
+              <thead>
+                <tr>
+                  <th>No</th>
+                  <th>NIK</th>
+                  <th>Nama Siswa</th>
+                  <th>L/P</th>
+                  <th>Jenjang</th>
+                  <th>Sekolah</th>
+                  <th>Kecamatan</th>
+                  <th>Jalur</th>
+                  <th>NISN</th>
+                  <th>Kemunculan</th>
+                </tr>
+              </thead>
+              <tbody id="tbodyDuplikat"></tbody>
+            </table>
+          </div>
+          <div id="emptyDuplikatFilter" class="empty-state" style="display:none;">Tidak ada hasil yang cocok dengan pencarian.</div>
+        </div>
+      </section>
+
     </div>
   </main>
 
@@ -606,6 +678,7 @@
       siswaPage: 1,
       pageSize: 50,
       kuotaSort: { key: 'namaSekolah', dir: 1 },
+      allDuplikat: [],    // baris siswa ber-NIK duplikat, diratakan (flatten) dari data.duplikatNik
       charts: {}
     };
 
@@ -617,6 +690,7 @@
       bindDashboardControls();
       bindSiswaControls();
       bindRekapToggle();
+      bindDuplikatControls();
       loadDashboard(false);
 
       document.getElementById('btnRefresh').addEventListener('click', function () {
@@ -643,6 +717,10 @@
 
           renderKecamatan(data);
           renderRekap('hasil');
+
+          state.allDuplikat = flattenDuplikat_(data.duplikatNik || []);
+          renderDuplikatStats(data.ringkasanDuplikat || { totalNikDuplikat: 0, totalSiswaDuplikat: 0 });
+          renderDuplikat('');
 
           toast(forceRefresh ? 'Data berhasil dimuat ulang.' : 'Data berhasil dimuat.', 'success');
         })
@@ -946,6 +1024,139 @@
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Data Siswa');
       XLSX.writeFile(wb, 'Data_Siswa_Ukuran_Baju_Celana_' + Date.now() + '.xlsx');
+      toast('File Excel berhasil diunduh (' + rows.length.toLocaleString('id-ID') + ' baris).', 'success');
+    }
+
+    // ======================================================================
+    // TAB DUPLIKAT NIK
+    // ======================================================================
+
+    /** Ubah data.duplikatNik (array kelompok NIK) jadi array baris siswa
+     *  yang sudah "diratakan" (1 baris = 1 siswa), plus info kelompok
+     *  (nik, jumlah, groupIndex genap/ganjil) utk pewarnaan & filter. */
+    function flattenDuplikat_(groups) {
+      const rows = [];
+      groups.forEach(function (g, gi) {
+        g.siswa.forEach(function (s) {
+          rows.push({
+            nik: g.nik,
+            jumlah: g.jumlah,
+            groupIndex: gi,
+            namaSiswa: s.namaSiswa,
+            jenisKelamin: s.jenisKelamin,
+            jenjang: s.jenjang,
+            namaSekolah: s.namaSekolah,
+            kecamatan: s.kecamatan,
+            jalur: s.jalur,
+            nisn: s.nisn
+          });
+        });
+      });
+      return rows;
+    }
+
+    function bindDuplikatControls() {
+      document.getElementById('searchDuplikat').addEventListener('input', debounce(function (e) {
+        renderDuplikat(e.target.value || '');
+      }, 200));
+      document.getElementById('btnExportDuplikat').addEventListener('click', exportDuplikatExcel);
+    }
+
+    function renderDuplikatStats(ringkasan) {
+      const badge = document.getElementById('dupBadge');
+      if (ringkasan.totalNikDuplikat > 0) {
+        badge.style.display = 'inline-block';
+        badge.textContent = ringkasan.totalNikDuplikat;
+      } else {
+        badge.style.display = 'none';
+      }
+
+      const iconDup = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="12" height="12" rx="2.5"/><rect x="9" y="9" width="12" height="12" rx="2.5"/></svg>';
+      const iconUsers = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H7a4 4 0 00-4 4v2"/><circle cx="10" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>';
+      const cards = [
+        { icon: iconDup, cls: ringkasan.totalNikDuplikat > 0 ? 'icon-red' : 'icon-green', value: ringkasan.totalNikDuplikat, label: 'NIK Terdeteksi Duplikat' },
+        { icon: iconUsers, cls: ringkasan.totalSiswaDuplikat > 0 ? 'icon-red' : 'icon-green', value: ringkasan.totalSiswaDuplikat, label: 'Total Baris Siswa Terdampak' }
+      ];
+      document.getElementById('duplikatStatCards').innerHTML = cards.map(function (c) {
+        return '<div class="stat-card">' +
+          '<div class="stat-card__top"><div class="stat-card__icon ' + c.cls + '">' + c.icon + '</div></div>' +
+          '<div class="stat-card__value">' + c.value + '</div>' +
+          '<div class="stat-card__label">' + c.label + '</div>' +
+          '</div>';
+      }).join('');
+    }
+
+    function renderDuplikat(query) {
+      const q = normalizeSearch_(query);
+      let rows = state.allDuplikat;
+      if (q) {
+        rows = rows.filter(function (r) {
+          return normalizeSearch_(r.nik).indexOf(q) !== -1 ||
+            normalizeSearch_(r.namaSiswa).indexOf(q) !== -1 ||
+            normalizeSearch_(r.namaSekolah).indexOf(q) !== -1;
+        });
+      }
+
+      const noDataAtAll = state.allDuplikat.length === 0;
+      document.getElementById('duplikatEmptyNote').style.display = noDataAtAll ? 'flex' : 'none';
+      document.getElementById('duplikatCard').style.display = noDataAtAll ? 'none' : 'block';
+
+      const totalNik = state.dashboard && state.dashboard.ringkasanDuplikat
+        ? state.dashboard.ringkasanDuplikat.totalNikDuplikat : 0;
+      document.getElementById('duplikatCount').textContent =
+        totalNik + ' NIK duplikat ditemukan (' + rows.length + ' baris ditampilkan)';
+
+      document.getElementById('emptyDuplikatFilter').style.display = (!noDataAtAll && rows.length === 0) ? 'block' : 'none';
+
+      const html = [];
+      let lastNik = null, alt = false, no = 0;
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        if (r.nik !== lastNik) { alt = !alt; lastNik = r.nik; }
+        no++;
+        const jk = r.jenisKelamin === 'Laki-laki' ? 'L' : (r.jenisKelamin === 'Perempuan' ? 'P' : (r.jenisKelamin || '—'));
+        html.push(
+          '<tr class="' + (alt ? 'dup-row-a' : 'dup-row-b') + '">' +
+          '<td>' + no + '</td>' +
+          '<td class="dup-nik">' + escapeHtml(r.nik) + '</td>' +
+          '<td>' + escapeHtml(r.namaSiswa) + '</td>' +
+          '<td>' + jk + '</td>' +
+          '<td>' + escapeHtml(r.jenjang || '—') + '</td>' +
+          '<td>' + escapeHtml(r.namaSekolah) + '</td>' +
+          '<td>' + escapeHtml(r.kecamatan || '—') + '</td>' +
+          '<td>' + escapeHtml(r.jalur || '—') + '</td>' +
+          '<td>' + escapeHtml(r.nisn || '—') + '</td>' +
+          '<td><span class="badge badge-kurang">' + r.jumlah + 'x</span></td>' +
+          '</tr>'
+        );
+      }
+      document.getElementById('tbodyDuplikat').innerHTML = html.join('');
+    }
+
+    function normalizeSearch_(v) {
+      return String(v == null ? '' : v).toLowerCase().trim();
+    }
+
+    function exportDuplikatExcel() {
+      if (!state.allDuplikat.length) { toast('Tidak ada NIK duplikat untuk diekspor.', 'error'); return; }
+      const rows = state.allDuplikat.map(function (r, i) {
+        return {
+          'No': i + 1,
+          'NIK': r.nik,
+          'Nama Siswa': r.namaSiswa,
+          'L/P': r.jenisKelamin,
+          'Jenjang': r.jenjang,
+          'Sekolah': r.namaSekolah,
+          'Kecamatan': r.kecamatan,
+          'Jalur': r.jalur,
+          'NISN': r.nisn,
+          'Jumlah Kemunculan NIK': r.jumlah
+        };
+      });
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'NIK Duplikat');
+      XLSX.writeFile(wb, 'NIK_Duplikat_' + Date.now() + '.xlsx');
       toast('File Excel berhasil diunduh (' + rows.length.toLocaleString('id-ID') + ' baris).', 'success');
     }
 
