@@ -1,0 +1,35 @@
+<script>
+  (function loadLogo(){
+    var LOGO_FILE_ID = "1rEVk72Drtcpiq9zSD1qE06mAWtXJaz2g";
+    var imgEl = document.getElementById("headerLogoImg");
+    var fallbackEl = document.getElementById("headerLogoFallback");
+    if (!imgEl || !fallbackEl) return;
+
+    function showImage(src){
+      imgEl.src = src;
+      imgEl.style.display = "block";
+      fallbackEl.style.display = "none";
+    }
+
+    // Percobaan 1: URL publik Drive (di-preload lewat objek Image agar tidak
+    // pernah menampilkan ikon "broken image" ke pengguna).
+    var probe = new Image();
+    probe.onload = function(){ showImage(probe.src); };
+    probe.onerror = function(){
+      // Percobaan 2: lewat backend Apps Script
+      if (window.google && google.script && google.script.run) {
+        google.script.run
+          .withSuccessHandler(function(dataUri){
+            if (dataUri) { showImage(dataUri); }
+            // kalau kosong/gagal, badge cadangan tetap tampil (sudah default)
+          })
+          .withFailureHandler(function(err){
+            console.warn("Logo backend gagal dimuat:", err && err.message ? err.message : err);
+            // badge cadangan tetap tampil
+          })
+          .getLogoDataUri();
+      }
+    };
+    probe.src = "https://lh3.googleusercontent.com/d/" + LOGO_FILE_ID + "=w200";
+  })();
+</script>
