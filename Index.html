@@ -715,12 +715,19 @@
           state.allSiswa = data.siswaRows || [];
           applyLocalFilters();
 
-          renderKecamatan(data);
-          renderRekap('hasil');
+          // Setiap bagian dibungkus try/catch sendiri-sendiri: kalau satu
+          // bagian gagal (mis. Chart.js dari CDN gagal dimuat / diblokir
+          // jaringan), bagian lain tetap jalan normal alih-alih ikut berhenti.
+          try { renderKecamatan(data); } catch (err) { console.error('renderKecamatan gagal:', err); }
+          try { renderRekap('hasil'); } catch (err) { console.error('renderRekap gagal:', err); }
 
-          state.allDuplikat = flattenDuplikat_(data.duplikatNik || []);
-          renderDuplikatStats(data.ringkasanDuplikat || { totalNikDuplikat: 0, totalSiswaDuplikat: 0 });
-          renderDuplikat('');
+          try {
+            state.allDuplikat = flattenDuplikat_(data.duplikatNik || []);
+            renderDuplikatStats(data.ringkasanDuplikat || { totalNikDuplikat: 0, totalSiswaDuplikat: 0 });
+            renderDuplikat('');
+          } catch (err) {
+            console.error('Render Duplikat NIK gagal:', err);
+          }
 
           toast(forceRefresh ? 'Data berhasil dimuat ulang.' : 'Data berhasil dimuat.', 'success');
         })
