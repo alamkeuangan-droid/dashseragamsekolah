@@ -48,7 +48,7 @@ const CONFIG = {
 
   // Nama sheet berisi kuota rombel (sheet "skrombel").
   // GANTI sesuai nama tab sheet Anda yang sebenarnya.
-  SHEET_KUOTA: 'skrombel',
+  SHEET_KUOTA: 'Skrombel',
 
   // Nama sheet referensi wilayah (NPSN -> Kelurahan/Kecamatan), kolomnya:
   // NPSN | NAMA SEKOLAH | JENJANG | KELURAHAN | KECAMATAN.
@@ -61,8 +61,8 @@ const CONFIG = {
   KUOTA_HAS_HEADER: true,
   DB_HAS_HEADER: true,
 
-  APP_TITLE: 'Dashboard SERAGAM — Dinas Pendidikan Kota Makassar',
-  APP_SUBTITLE: 'Pemantauan Ukuran seragam jenjang SD SMP',
+  APP_TITLE: 'Dashboard PPDB — Dinas Pendidikan Kota Makassar',
+  APP_SUBTITLE: 'Pemantauan Pendaftaran, Kuota Rombel & Rekap Peserta Didik',
 
   // ID file logo di Google Drive (dipakai oleh LogoScript.html)
   LOGO_FILE_ID: '1rEVk72Drtcpiq9zSD1qE06mAWtXJaz2g',
@@ -152,30 +152,6 @@ function sheet_(name) {
 
 function normalize_(v) {
   return String(v == null ? '' : v).trim();
-}
-
-/** Normalisasi khusus NIK: NIK adalah 16 digit angka, tapi Google Sheets
- *  sering menyimpannya sbg tipe Number (bukan Text) yang berisiko salah
- *  baca (notasi ilmiah / dibulatkan / berakhiran ".0"). Fungsi ini
- *  menyeragamkan NIK dari kedua tipe (Number maupun Text) menjadi string
- *  digit-only apa adanya, supaya perbandingan "sama/tidak" antar baris
- *  akurat terlepas dari format aslinya di sheet. */
-function normalizeNik_(v) {
-  if (v === null || v === undefined || v === '') return '';
-  if (typeof v === 'number') {
-    if (!isFinite(v)) return '';
-    // NIK selalu bilangan bulat: buang sisa desimal akibat konversi float.
-    return String(Math.round(v));
-  }
-  let s = String(v).trim();
-  if (!s) return '';
-  // Kadang nilai berupa teks notasi ilmiah, mis. "3.173E+15".
-  if (/^-?\d+(\.\d+)?[eE][+-]?\d+$/.test(s)) {
-    const num = Number(s);
-    if (isFinite(num)) s = String(Math.round(num));
-  }
-  // Buang segala karakter selain digit (spasi, strip, apostrof, dsb).
-  return s.replace(/[^0-9]/g, '');
 }
 
 /** Kunci "canonical" (huruf besar semua + spasi ganda dirapikan) dipakai
@@ -272,7 +248,16 @@ function readHasilRaw_() {
   const lastCol = Math.max(sh.getLastColumn(), 12);
   const startRow = CONFIG.HASIL_HAS_HEADER ? 2 : 1;
   if (lastRow < startRow) return [];
-  const values = sh.getRange(startRow, 1, lastRow - startRow + 1, lastCol).getValues();
+  // PENTING: pakai getDisplayValues(), BUKAN getValues(), khusus di sini.
+  // NIK (16 digit) melebihi batas presisi aman angka JavaScript (~15-16
+  // digit) — kalau sel NIK/NISN diformat sebagai Angka (bukan Teks),
+  // getValues() bisa membulatkan digit terakhir atau mengubahnya jadi
+  // notasi ilmiah (mis. "3.8012E+15"). Kalau ada 2 baris NIK yang SAMA
+  // tapi satu tersimpan sbg Teks & satunya sbg Angka, keduanya jadi
+  // "kelihatan beda" dan gagal terdeteksi sebagai kembar. getDisplayValues()
+  // selalu membaca persis apa yang tertulis di sel (selalu berupa teks),
+  // jadi aman dari masalah ini.
+  const values = sh.getRange(startRow, 1, lastRow - startRow + 1, lastCol).getDisplayValues();
 
   const out = [];
   for (let i = 0; i < values.length; i++) {
@@ -288,7 +273,7 @@ function readHasilRaw_() {
       npsn: npsn,
       namaSekolah: normalize_(row[HASIL_COLS.NAMA_SEKOLAH]),
       namaSiswa: namaSiswa,
-      nik: normalizeNik_(row[HASIL_COLS.NIK]),
+      nik: normalize_(row[HASIL_COLS.NIK]),
       nisn: normalize_(row[HASIL_COLS.NISN]),
       jenisKelamin: normalize_(row[HASIL_COLS.JENIS_KELAMIN]),
       ukBaju: normalize_(row[HASIL_COLS.UK_BAJU]),
@@ -369,7 +354,7 @@ function readDbRaw_() {
  *
  * Format siswaRows sengaja berupa ARRAY (bukan object) demi ukuran
  * payload yang lebih kecil & lebih cepat untuk ±28.000 baris:
- *   [namaSiswa, jenisKelamin, jenjang, namaSekolah, kecamatan, jalur, ukBaju, ukCelana]
+ *   [namaSiswa, jenisKelamin, jenjang, namaSekolah, kecamatan, jalur, ukBaju, ukCelana, nik, nisn]
  */
 function getDashboardData(forceRefresh) {
   const cacheKey = 'dashboard_data_v5';
@@ -521,46 +506,59 @@ function getDashboardData(forceRefresh) {
       resolveKecamatan_(h.npsn),
       repJalur_(h.jalur),
       h.ukBaju,
-      h.ukCelana
+      h.ukCelana,
+      h.nik,
+      h.nisn
     ];
   });
 
-  // -------- 7) Deteksi siswa dengan NIK ganda/duplikat pada sheet HASIL --------
-  // Baris tanpa NIK (kosong) tidak dianggap "duplikat" satu sama lain.
-  const nikGroups_ = {}; // nik -> array baris hasil dengan NIK tsb
+  // -------- 7) Deteksi NISN kembar (duplikat) --------
+  // Tidak semua siswa punya NISN (banyak yang kosong) — baris dengan NISN
+  // kosong TIDAK dihitung sebagai duplikat. Spasi di dalam NISN dirapikan
+  // dulu supaya "123 456" dan "123456" dianggap sama.
+  const nisnGroups = {}; // nisnKey -> [{...siswa}]
   hasil.forEach(function (h) {
-    const nik = normalize_(h.nik);
-    if (!nik) return;
-    if (!nikGroups_[nik]) nikGroups_[nik] = [];
-    nikGroups_[nik].push(h);
-  });
-
-  const duplikatNik = Object.keys(nikGroups_)
-    .filter(function (nik) { return nikGroups_[nik].length > 1; })
-    .sort()
-    .map(function (nik) {
-      const rows = nikGroups_[nik];
-      return {
-        nik: nik,
-        jumlah: rows.length,
-        siswa: rows.map(function (h) {
-          return {
-            namaSiswa: h.namaSiswa,
-            jenisKelamin: h.jenisKelamin,
-            jenjang: h.jenjang,
-            namaSekolah: repSekolah_(h.namaSekolah),
-            kecamatan: resolveKecamatan_(h.npsn),
-            jalur: repJalur_(h.jalur),
-            nisn: h.nisn,
-            ukBaju: h.ukBaju,
-            ukCelana: h.ukCelana,
-            status: h.status
-          };
-        })
-      };
+    const nisnKey = normalize_(h.nisn).replace(/\s+/g, '');
+    if (!nisnKey) return;
+    if (!nisnGroups[nisnKey]) nisnGroups[nisnKey] = [];
+    nisnGroups[nisnKey].push({
+      namaSiswa: h.namaSiswa,
+      namaSekolah: repSekolah_(h.namaSekolah),
+      kecamatan: resolveKecamatan_(h.npsn),
+      nik: h.nik,
+      nisn: h.nisn
     });
+  });
+  const nisnKembar = Object.keys(nisnGroups)
+    .filter(function (key) { return nisnGroups[key].length > 1; })
+    .map(function (key) {
+      return { nisn: nisnGroups[key][0].nisn, jumlah: nisnGroups[key].length, siswa: nisnGroups[key] };
+    })
+    .sort(function (a, b) { return b.jumlah - a.jumlah || a.nisn.localeCompare(b.nisn); });
 
-  const totalSiswaDuplikat = duplikatNik.reduce(function (a, g) { return a + g.jumlah; }, 0);
+  // -------- 8) Deteksi NIK kembar (duplikat) --------
+  // Sama seperti NISN kembar di atas: baris dengan NIK kosong tidak dihitung
+  // sebagai duplikat. NIK semestinya selalu unik per anak, jadi kalau ada
+  // yang kembar biasanya menandakan salah ketik atau data terdaftar dua kali.
+  const nikGroups = {}; // nikKey -> [{...siswa}]
+  hasil.forEach(function (h) {
+    const nikKey = normalize_(h.nik).replace(/\s+/g, '');
+    if (!nikKey) return;
+    if (!nikGroups[nikKey]) nikGroups[nikKey] = [];
+    nikGroups[nikKey].push({
+      namaSiswa: h.namaSiswa,
+      namaSekolah: repSekolah_(h.namaSekolah),
+      kecamatan: resolveKecamatan_(h.npsn),
+      nik: h.nik,
+      nisn: h.nisn
+    });
+  });
+  const nikKembar = Object.keys(nikGroups)
+    .filter(function (key) { return nikGroups[key].length > 1; })
+    .map(function (key) {
+      return { nik: nikGroups[key][0].nik, jumlah: nikGroups[key].length, siswa: nikGroups[key] };
+    })
+    .sort(function (a, b) { return b.jumlah - a.jumlah || a.nik.localeCompare(b.nik); });
 
   const result = {
     generatedAt: new Date().toISOString(),
@@ -574,6 +572,8 @@ function getDashboardData(forceRefresh) {
     kuotaSekolah: kuotaSekolah,
     npsnTanpaKuota: npsnTanpaKuota,
     analisisKecamatan: analisisKecamatan,
+    nisnKembar: nisnKembar,
+    nikKembar: nikKembar,
     totalJenjang: {
       hasil: totalJenjangHasil,
       kuota: totalJenjangKuota
@@ -585,15 +585,8 @@ function getDashboardData(forceRefresh) {
       jalur: daftarJalur
     },
     // Urutan field tiap baris: lihat komentar fungsi di atas.
-    siswaFields: ['namaSiswa', 'jenisKelamin', 'jenjang', 'namaSekolah', 'kecamatan', 'jalur', 'ukBaju', 'ukCelana'],
-    siswaRows: siswaRows,
-    // Daftar NIK yang muncul lebih dari sekali pada sheet Hasil, beserta
-    // seluruh baris siswa yang memakai NIK tsb (utk tab "Duplikat NIK").
-    duplikatNik: duplikatNik,
-    ringkasanDuplikat: {
-      totalNikDuplikat: duplikatNik.length,
-      totalSiswaDuplikat: totalSiswaDuplikat
-    }
+    siswaFields: ['namaSiswa', 'jenisKelamin', 'jenjang', 'namaSekolah', 'kecamatan', 'jalur', 'ukBaju', 'ukCelana', 'nik', 'nisn'],
+    siswaRows: siswaRows
   };
 
   if (CONFIG.CACHE_SECONDS > 0) {
@@ -653,51 +646,6 @@ function getSiswaList(filters) {
   });
 
   return list;
-}
-
-// ----------------------------------------------------------------------
-// DIAGNOSTIK NIK DUPLIKAT (jalankan manual dari editor Apps Script:
-// pilih fungsi "debugCekNik" di dropdown atas, klik Run, lalu buka
-// View > Logs / Execution log untuk melihat hasilnya). Fungsi ini TIDAK
-// dipakai oleh UI web, aman dijalankan kapan saja untuk troubleshooting.
-// ----------------------------------------------------------------------
-function debugCekNik() {
-  const hasil = readHasilRaw_();
-  Logger.log('Total baris terbaca dari sheet HASIL: ' + hasil.length);
-
-  // Tampilkan 5 baris pertama apa adanya (raw sebelum & sesudah normalisasi)
-  // supaya kelihatan jika tipe datanya angka/teks bermasalah.
-  const sh = sheet_(CONFIG.SHEET_HASIL);
-  const startRow = CONFIG.HASIL_HAS_HEADER ? 2 : 1;
-  const sampleCount = Math.min(5, hasil.length);
-  for (let i = 0; i < sampleCount; i++) {
-    const rawCell = sh.getRange(startRow + i, HASIL_COLS.NIK + 1).getValue();
-    Logger.log('Baris ' + (startRow + i) + ' -> raw="' + rawCell + '" (tipe: ' + (typeof rawCell) +
-      ') | setelah normalisasi: "' + normalizeNik_(rawCell) + '"');
-  }
-
-  // Hitung NIK yang muncul >1 kali.
-  const freq = {};
-  hasil.forEach(function (h) {
-    if (!h.nik) return;
-    freq[h.nik] = (freq[h.nik] || 0) + 1;
-  });
-  const dup = Object.keys(freq).filter(function (k) { return freq[k] > 1; });
-  Logger.log('Jumlah baris dengan NIK kosong: ' + hasil.filter(function (h) { return !h.nik; }).length);
-  Logger.log('Jumlah NIK unik terdeteksi: ' + Object.keys(freq).length);
-  Logger.log('Jumlah NIK DUPLIKAT terdeteksi: ' + dup.length);
-  dup.slice(0, 20).forEach(function (nik) {
-    Logger.log('  NIK "' + nik + '" muncul ' + freq[nik] + 'x');
-  });
-  if (dup.length > 20) Logger.log('  ... dan ' + (dup.length - 20) + ' NIK duplikat lainnya.');
-
-  return {
-    totalBaris: hasil.length,
-    nikKosong: hasil.filter(function (h) { return !h.nik; }).length,
-    nikUnik: Object.keys(freq).length,
-    nikDuplikat: dup.length,
-    contohNikDuplikat: dup.slice(0, 20)
-  };
 }
 
 // ----------------------------------------------------------------------
