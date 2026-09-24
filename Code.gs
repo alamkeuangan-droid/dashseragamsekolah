@@ -196,6 +196,17 @@ function guessJenjang_(namaSekolah) {
   return 'Lainnya';
 }
 
+/** Menyeragamkan nilai kolom JENIS_KELAMIN (bisa ditulis "L"/"P",
+ *  "Laki-laki"/"Perempuan", "LK"/"PR", dsb) menjadi 3 kategori tetap,
+ *  dipakai oleh rekap Analisis (jumlah Laki-laki/Perempuan). */
+function classifyGender_(v) {
+  const s = normalize_(v).toUpperCase();
+  if (!s) return 'Tidak Diketahui';
+  if (s === 'L' || s === 'LK' || s.indexOf('LAKI') !== -1 || s.indexOf('PRIA') !== -1) return 'Laki-laki';
+  if (s === 'P' || s === 'PR' || s.indexOf('PEREMPUAN') !== -1 || s.indexOf('WANITA') !== -1) return 'Perempuan';
+  return 'Tidak Diketahui';
+}
+
 // ----------------------------------------------------------------------
 // CACHE BERTINGKAT (CHUNKED) — agar payload besar (>100KB) tetap bisa
 // di-cache oleh CacheService, yang membatasi setiap nilai maksimal 100KB.
@@ -357,7 +368,7 @@ function readDbRaw_() {
  *   [namaSiswa, jenisKelamin, jenjang, namaSekolah, kecamatan, jalur, ukBaju, ukCelana, nik, nisn]
  */
 function getDashboardData(forceRefresh) {
-  const cacheKey = 'dashboard_data_v5';
+  const cacheKey = 'dashboard_data_v8'; // dinaikkan lagi krn tambahan analisisSiswa (L/P, ukuran baju/celana, jumlah siswa per jenjang & per sekolah)
   if (CONFIG.CACHE_SECONDS > 0 && !forceRefresh) {
     const cached = cacheRead_(cacheKey);
     if (cached) return cached;
@@ -523,8 +534,11 @@ function getDashboardData(forceRefresh) {
     if (!nisnGroups[nisnKey]) nisnGroups[nisnKey] = [];
     nisnGroups[nisnKey].push({
       namaSiswa: h.namaSiswa,
+      jenisKelamin: h.jenisKelamin,
+      jenjang: h.jenjang,
       namaSekolah: repSekolah_(h.namaSekolah),
       kecamatan: resolveKecamatan_(h.npsn),
+      jalur: repJalur_(h.jalur),
       nik: h.nik,
       nisn: h.nisn
     });
@@ -547,8 +561,11 @@ function getDashboardData(forceRefresh) {
     if (!nikGroups[nikKey]) nikGroups[nikKey] = [];
     nikGroups[nikKey].push({
       namaSiswa: h.namaSiswa,
+      jenisKelamin: h.jenisKelamin,
+      jenjang: h.jenjang,
       namaSekolah: repSekolah_(h.namaSekolah),
       kecamatan: resolveKecamatan_(h.npsn),
+      jalur: repJalur_(h.jalur),
       nik: h.nik,
       nisn: h.nisn
     });
@@ -559,6 +576,89 @@ function getDashboardData(forceRefresh) {
       return { nik: nikGroups[key][0].nik, jumlah: nikGroups[key].length, siswa: nikGroups[key] };
     })
     .sort(function (a, b) { return b.jumlah - a.jumlah || a.nik.localeCompare(b.nik); });
+
+  // -------- 9) Analisis Peserta Didik: L/P, Ukuran Baju & Celana, Jumlah
+  //             Siswa — dihitung "Keseluruhan", "Per Jenjang", dan "Per
+  //             Sekolah" sekaligus, agar tab Analisis di client tinggal
+  //             menampilkan tanpa perlu hitung ulang dari 28rb baris. --------
+  function emptyGenderUkuran_() {
+    return { totalSiswa: 0, totalL: 0, totalP: 0, totalTidakDiketahui: 0, ukBaju: {}, ukCelana: {} };
+  }
+  function addKeBucket_(bucket, h) {
+    bucket.totalSiswa++;
+    const g = classifyGender_(h.jenisKelamin);
+    if (g === 'Laki-laki') bucket.totalL++;
+    else if (g === 'Perempuan') bucket.totalP++;
+    else bucket.totalTidakDiketahui++;
+    const baju = h.ukBaju || 'Tidak Diisi';
+    bucket.ukBaju[baju] = (bucket.ukBaju[baju] || 0) + 1;
+    const celana = h.ukCelana || 'Tidak Diisi';
+    bucket.ukCelana[celana] = (bucket.ukCelana[celana] || 0) + 1;
+  }
+
+  const keseluruhanBucket = emptyGenderUkuran_();
+  const jenjangBuckets = {};   // jenjang -> bucket
+  const sekolahBuckets = {};   // key -> { namaSekolah, jenjang, kecamatan, bucket }
+
+  hasil.forEach(function (h) {
+    addKeBucket_(keseluruhanBucket, h);
+
+    const j = h.jenjang || 'Lainnya';
+    if (!jenjangBuckets[j]) jenjangBuckets[j] = emptyGenderUkuran_();
+    addKeBucket_(jenjangBuckets[j], h);
+
+    const sekKey = h.npsn || ('NONPSN::' + h.namaSekolah);
+    if (!sekolahBuckets[sekKey]) {
+      sekolahBuckets[sekKey] = {
+        namaSekolah: repSekolah_(h.namaSekolah),
+        jenjang: h.jenjang || 'Lainnya',
+        kecamatan: resolveKecamatan_(h.npsn),
+        bucket: emptyGenderUkuran_()
+      };
+    }
+    addKeBucket_(sekolahBuckets[sekKey].bucket, h);
+  });
+
+  const analisisPerJenjang = Object.keys(jenjangBuckets).sort().map(function (j) {
+    const b = jenjangBuckets[j];
+    return {
+      jenjang: j,
+      totalSiswa: b.totalSiswa,
+      totalL: b.totalL,
+      totalP: b.totalP,
+      totalTidakDiketahui: b.totalTidakDiketahui,
+      ukBaju: b.ukBaju,
+      ukCelana: b.ukCelana
+    };
+  });
+
+  const analisisPerSekolah = Object.keys(sekolahBuckets).map(function (key) {
+    const s = sekolahBuckets[key];
+    return {
+      namaSekolah: s.namaSekolah,
+      jenjang: s.jenjang,
+      kecamatan: s.kecamatan,
+      totalSiswa: s.bucket.totalSiswa,
+      totalL: s.bucket.totalL,
+      totalP: s.bucket.totalP,
+      totalTidakDiketahui: s.bucket.totalTidakDiketahui,
+      ukBaju: s.bucket.ukBaju,
+      ukCelana: s.bucket.ukCelana
+    };
+  }).sort(function (a, b) { return a.namaSekolah.localeCompare(b.namaSekolah); });
+
+  const analisisSiswa = {
+    keseluruhan: {
+      totalSiswa: keseluruhanBucket.totalSiswa,
+      totalL: keseluruhanBucket.totalL,
+      totalP: keseluruhanBucket.totalP,
+      totalTidakDiketahui: keseluruhanBucket.totalTidakDiketahui,
+      ukBaju: keseluruhanBucket.ukBaju,
+      ukCelana: keseluruhanBucket.ukCelana
+    },
+    perJenjang: analisisPerJenjang,
+    perSekolah: analisisPerSekolah
+  };
 
   const result = {
     generatedAt: new Date().toISOString(),
@@ -572,8 +672,18 @@ function getDashboardData(forceRefresh) {
     kuotaSekolah: kuotaSekolah,
     npsnTanpaKuota: npsnTanpaKuota,
     analisisKecamatan: analisisKecamatan,
+    analisisSiswa: analisisSiswa,
     nisnKembar: nisnKembar,
     nikKembar: nikKembar,
+    // Alias agar cocok dengan nama yang dipakai Index.html (tab "Duplikat NIK/NISN").
+    duplikatNik: nikKembar,
+    duplikatNisn: nisnKembar,
+    ringkasanDuplikat: {
+      totalNikDuplikat: nikKembar.length,
+      totalSiswaDuplikat: nikKembar.reduce(function (a, g) { return a + g.jumlah; }, 0),
+      totalNisnDuplikat: nisnKembar.length,
+      totalSiswaDuplikatNisn: nisnKembar.reduce(function (a, g) { return a + g.jumlah; }, 0)
+    },
     totalJenjang: {
       hasil: totalJenjangHasil,
       kuota: totalJenjangKuota
