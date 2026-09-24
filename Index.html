@@ -6,8 +6,65 @@
   <title><?= appTitle ?></title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script>
+    // ----------------------------------------------------------------
+    // LOADER PUSTAKA EKSTERNAL (Chart.js & SheetJS/xlsx) DENGAN FALLBACK
+    // ----------------------------------------------------------------
+    // Kalau CDN utama (cdnjs) diblokir oleh firewall/CSP di jaringan
+    // pengguna, kode di bawah otomatis mencoba CDN cadangan (jsdelivr,
+    // lalu unpkg). Kalau SEMUA CDN gagal, window.__libLoadErrors akan
+    // berisi nama pustaka yang gagal, supaya bisa ditampilkan sebagai
+    // pesan yang jelas ke pengguna alih-alih "ReferenceError: Chart is
+    // not defined" yang membingungkan di console.
+    window.__libLoadErrors = [];
+    window.__libsReady = new Promise(function (resolveLibs) {
+      var libs = [
+        {
+          name: 'Chart.js',
+          check: function () { return typeof window.Chart !== 'undefined'; },
+          urls: [
+            'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js',
+            'https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js',
+            'https://unpkg.com/chart.js@4.4.4/dist/chart.umd.min.js'
+          ]
+        },
+        {
+          name: 'SheetJS (xlsx)',
+          check: function () { return typeof window.XLSX !== 'undefined'; },
+          urls: [
+            'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
+            'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
+            'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js'
+          ]
+        }
+      ];
+
+      function loadOne(lib, urlIndex, done) {
+        if (lib.check()) { done(true); return; }
+        if (urlIndex >= lib.urls.length) {
+          window.__libLoadErrors.push(lib.name);
+          done(false);
+          return;
+        }
+        var s = document.createElement('script');
+        s.src = lib.urls[urlIndex];
+        s.onload = function () {
+          if (lib.check()) { done(true); }
+          else { loadOne(lib, urlIndex + 1, done); } // ke CDN berikutnya
+        };
+        s.onerror = function () { loadOne(lib, urlIndex + 1, done); };
+        document.head.appendChild(s);
+      }
+
+      var remaining = libs.length;
+      libs.forEach(function (lib) {
+        loadOne(lib, 0, function () {
+          remaining--;
+          if (remaining === 0) resolveLibs(window.__libLoadErrors);
+        });
+      });
+    });
+  </script>
   <style>
     /* ==========================================================
        DESIGN TOKENS
@@ -258,6 +315,7 @@
     #tableDuplikat tbody tr.dup-row-b{ background: var(--amber-50) !important; }
     #tableDuplikat tbody tr.dup-row-a:hover, #tableDuplikat tbody tr.dup-row-b:hover{ filter: brightness(0.97); }
     #tableDuplikat td.dup-nik{ font-weight:700; font-family: monospace; letter-spacing:.02em; }
+    #tableDuplikat td.dup-key{ font-weight:700; font-family: monospace; letter-spacing:.02em; }
 
     .progress{ width:90px; height:6px; border-radius:99px; background: var(--blue-50); overflow:hidden; }
     .progress i{ display:block; height:100%; background: var(--blue-500); }
@@ -347,7 +405,7 @@
       </button>
       <button class="tab-btn" data-tab="kecamatan">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21V9l8-6 8 6v12"/><path d="M9 21v-6h6v6"/></svg>
-        Analisis Kecamatan
+        Analisis
       </button>
       <button class="tab-btn" data-tab="rekap">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 15l4-6 3 3 5-7"/></svg>
@@ -517,6 +575,8 @@
                   <th>Sekolah</th>
                   <th>Kecamatan</th>
                   <th>Jalur</th>
+                  <th>NIK</th>
+                  <th>NISN</th>
                   <th>Ukuran Baju</th>
                   <th>Ukuran Celana</th>
                 </tr>
@@ -537,18 +597,130 @@
         </div>
       </section>
 
-      <!-- ======================= TAB: KECAMATAN ======================= -->
+      <!-- ======================= TAB: ANALISIS ======================= -->
       <section class="tab-panel" data-panel="kecamatan">
         <div class="page-head">
-          <div class="eyebrow">Sebaran Wilayah</div>
-          <h2>Analisis Jumlah Siswa per Kecamatan</h2>
-          <p>Bandingkan jumlah pendaftar aktual (sheet Hasil) dengan total kuota yang tersedia (sheet Skrombel) di tiap kecamatan.</p>
+          <div class="eyebrow">Rekap &amp; Sebaran Peserta Didik</div>
+          <h2>Analisis Peserta Didik</h2>
+          <p>Rekap jumlah siswa Laki-laki/Perempuan, ukuran baju &amp; celana, serta jumlah siswa — ditampilkan secara keseluruhan, per jenjang, maupun per sekolah. Di bagian bawah juga tersedia perbandingan pendaftar vs kuota per kecamatan.</p>
         </div>
 
         <div class="card">
           <div class="card__head">
+            <h3>Cakupan Rekap</h3>
+            <div class="segmented" id="analisisScopeToggle">
+              <button class="active" data-scope="keseluruhan">Keseluruhan</button>
+              <button data-scope="jenjang">Per Jenjang</button>
+              <button data-scope="sekolah">Per Sekolah</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ---- SUB-SCOPE: KESELURUHAN ---- -->
+        <div id="analisisScopeKeseluruhan" class="analisis-scope">
+          <div class="grid-stats" id="analisisKeseluruhanCards"></div>
+
+          <div class="card">
+            <div class="card__head">
+              <div>
+                <h3>Perbandingan Laki-laki &amp; Perempuan</h3>
+                <div class="sub">Jumlah keseluruhan peserta didik berdasarkan jenis kelamin</div>
+              </div>
+            </div>
+            <div class="chart-box small" style="max-width:420px;margin:0 auto;"><canvas id="chartGenderKeseluruhan"></canvas></div>
+          </div>
+
+          <div class="charts-grid">
+            <div class="card">
+              <div class="card__head"><h3>Rekap Ukuran Baju (Keseluruhan)</h3></div>
+              <div class="chart-box small"><canvas id="chartBajuKeseluruhan"></canvas></div>
+              <div class="table-wrap" style="margin-top:14px;">
+                <table><thead><tr><th>Ukuran Baju</th><th>Jumlah</th></tr></thead><tbody id="tbodyBajuKeseluruhan"></tbody></table>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card__head"><h3>Rekap Ukuran Bawahan (Keseluruhan)</h3></div>
+              <div class="chart-box small"><canvas id="chartCelanaKeseluruhan"></canvas></div>
+              <div class="table-wrap" style="margin-top:14px;">
+                <table><thead><tr><th>Ukuran Bawahan</th><th>Jumlah</th></tr></thead><tbody id="tbodyCelanaKeseluruhan"></tbody></table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ---- SUB-SCOPE: PER JENJANG ---- -->
+        <div id="analisisScopeJenjang" class="analisis-scope" style="display:none;">
+          <div class="card">
+            <div class="card__head">
+              <div>
+                <h3>Jumlah Siswa, Laki-laki &amp; Perempuan per Jenjang</h3>
+                <div class="sub">Batang biru = Laki-laki · Batang merah muda = Perempuan</div>
+              </div>
+            </div>
+            <div class="chart-box"><canvas id="chartGenderJenjang"></canvas></div>
+            <div class="table-wrap" style="margin-top:14px;">
+              <table>
+                <thead><tr><th>Jenjang</th><th>Jumlah Siswa</th><th>Laki-laki</th><th>Perempuan</th></tr></thead>
+                <tbody id="tbodyJenjangRingkas"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="jenjangUkuranCards"></div>
+        </div>
+
+        <!-- ---- SUB-SCOPE: PER SEKOLAH ---- -->
+        <div id="analisisScopeSekolah" class="analisis-scope" style="display:none;">
+          <div class="card">
+            <div class="card__head">
+              <div>
+                <h3>Rekap Semua Sekolah</h3>
+                <div class="sub">Jumlah siswa, Laki-laki &amp; Perempuan per sekolah. Ketik pada kotak pencarian untuk menyaring.</div>
+              </div>
+            </div>
+            <div class="filters" style="margin-bottom:10px;">
+              <div class="field" style="flex:2 1 220px;">
+                <label>Cari Sekolah</label>
+                <input type="text" id="searchAnalisisSekolah" placeholder="Ketik nama sekolah…">
+              </div>
+              <div class="field">
+                <label>Pilih Sekolah (Detail)</label>
+                <select id="selectAnalisisSekolah"><option value="">— Pilih sekolah untuk lihat rincian ukuran —</option></select>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Sekolah</th><th>Kecamatan</th><th>Jenjang</th><th>Jumlah Siswa</th><th>Laki-laki</th><th>Perempuan</th></tr></thead>
+                <tbody id="tbodySekolahRingkas"></tbody>
+              </table>
+            </div>
+            <div id="emptyAnalisisSekolah" class="empty-state" style="display:none;">Tidak ada sekolah yang cocok.</div>
+          </div>
+
+          <div class="card" id="cardDetailSekolah" style="display:none;">
+            <div class="card__head">
+              <div>
+                <h3 id="detailSekolahTitle">Rincian Sekolah</h3>
+                <div class="sub">Jumlah siswa, Laki-laki/Perempuan, serta rekap ukuran baju &amp; celana khusus sekolah ini</div>
+              </div>
+            </div>
+            <div class="grid-stats" id="detailSekolahCards" style="grid-template-columns: repeat(3, 1fr); max-width:760px;"></div>
+            <div class="charts-grid" style="margin-top:16px;">
+              <div class="table-wrap">
+                <table><thead><tr><th>Ukuran Baju</th><th>Jumlah</th></tr></thead><tbody id="tbodyBajuSekolah"></tbody></table>
+              </div>
+              <div class="table-wrap">
+                <table><thead><tr><th>Ukuran Celana</th><th>Jumlah</th></tr></thead><tbody id="tbodyCelanaSekolah"></tbody></table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ---- PERBANDINGAN PENDAFTAR VS KUOTA PER KECAMATAN (fitur lama) ---- -->
+        <div class="card">
+          <div class="card__head">
             <div>
-              <h3>Grafik Perbandingan</h3>
+              <h3>Perbandingan Pendaftar vs Kuota per Kecamatan</h3>
               <div class="sub">Batang biru = jumlah pendaftar · Batang merah = total kuota</div>
             </div>
           </div>
@@ -591,30 +763,37 @@
         <div class="grid-stats" id="rekapCards"></div>
       </section>
 
-      <!-- ======================= TAB: DUPLIKAT NIK ======================= -->
+      <!-- ======================= TAB: DUPLIKAT NIK / NISN ======================= -->
       <section class="tab-panel" data-panel="duplikat">
         <div class="page-head">
           <div class="eyebrow">Validasi Data</div>
-          <h2>Siswa dengan NIK Duplikat</h2>
-          <p>Menampilkan siswa yang NIK-nya tercatat lebih dari satu kali pada sheet <b>Hasil</b>, agar dapat ditelusuri dan diverifikasi kebenarannya.</p>
+          <h2 id="duplikatTitle">Siswa dengan NIK Duplikat</h2>
+          <p id="duplikatDesc">Menampilkan siswa yang NIK-nya tercatat lebih dari satu kali pada sheet <b>Hasil</b>, agar dapat ditelusuri dan diverifikasi kebenarannya.</p>
         </div>
 
         <div class="grid-stats" id="duplikatStatCards" style="grid-template-columns: repeat(2, 1fr); max-width:640px;"></div>
 
         <div class="note" id="duplikatEmptyNote" style="display:none;">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
-          <span>Tidak ditemukan NIK duplikat pada data saat ini. Semua NIK pada sheet Hasil unik. 🎉</span>
+          <span id="duplikatEmptyText">Tidak ditemukan NIK duplikat pada data saat ini. Semua NIK pada sheet Hasil unik. 🎉</span>
         </div>
 
         <div class="card" id="duplikatCard">
           <div class="card__head">
             <div>
               <h3 id="duplikatCount">0 NIK duplikat ditemukan</h3>
-              <div class="sub">Baris dengan NIK yang sama diberi warna latar sama agar mudah dibandingkan.</div>
+              <div class="sub">Baris dengan nilai yang sama diberi warna latar sama agar mudah dibandingkan.</div>
             </div>
             <div class="filters" style="margin:0;">
+              <div class="field" style="min-width:170px;">
+                <label>Tampilkan Duplikat</label>
+                <select id="dupModeSelect">
+                  <option value="nik">NIK Duplikat</option>
+                  <option value="nisn">NISN Duplikat</option>
+                </select>
+              </div>
               <div class="field" style="min-width:240px;">
-                <label>Cari NIK / Nama / Sekolah</label>
+                <label id="searchDuplikatLabel">Cari NIK / Nama / Sekolah</label>
                 <input type="text" id="searchDuplikat" placeholder="Ketik NIK, nama siswa, atau nama sekolah…">
               </div>
             </div>
@@ -622,7 +801,7 @@
           <div class="btn-row no-print">
             <button class="btn btn-accent" id="btnExportDuplikat">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg>
-              Unduh Excel (Daftar NIK Duplikat)
+              <span id="btnExportDuplikatLabel">Unduh Excel (Daftar NIK Duplikat)</span>
             </button>
           </div>
           <div class="table-wrap">
@@ -631,13 +810,13 @@
                 <tr>
                   <th>No</th>
                   <th>NIK</th>
+                  <th>NISN</th>
                   <th>Nama Siswa</th>
                   <th>L/P</th>
                   <th>Jenjang</th>
                   <th>Sekolah</th>
                   <th>Kecamatan</th>
                   <th>Jalur</th>
-                  <th>NISN</th>
                   <th>Kemunculan</th>
                 </tr>
               </thead>
@@ -669,7 +848,7 @@
     // ======================================================================
     // Indeks field pada setiap baris state.dashboard.siswaRows — harus
     // sinkron dengan urutan yang dikirim Code.gs (lihat siswaFields).
-    const SF = { NAMA: 0, JK: 1, JENJANG: 2, SEKOLAH: 3, KECAMATAN: 4, JALUR: 5, UKBAJU: 6, UKCELANA: 7 };
+    const SF = { NAMA: 0, JK: 1, JENJANG: 2, SEKOLAH: 3, KECAMATAN: 4, JALUR: 5, UKBAJU: 6, UKCELANA: 7, NIK: 8, NISN: 9 };
 
     const state = {
       dashboard: null,
@@ -678,7 +857,9 @@
       siswaPage: 1,
       pageSize: 50,
       kuotaSort: { key: 'namaSekolah', dir: 1 },
-      allDuplikat: [],    // baris siswa ber-NIK duplikat, diratakan (flatten) dari data.duplikatNik
+      allDuplikatNik: [],   // baris siswa ber-NIK duplikat, diratakan (flatten) dari data.duplikatNik
+      allDuplikatNisn: [],  // baris siswa ber-NISN duplikat, diratakan (flatten) dari data.duplikatNisn
+      dupMode: 'nik',       // 'nik' atau 'nisn' — sumber data yang sedang ditampilkan di tab Duplikat
       charts: {}
     };
 
@@ -690,6 +871,8 @@
       bindDashboardControls();
       bindSiswaControls();
       bindRekapToggle();
+      bindAnalisisScopeToggle();
+      bindAnalisisSekolahControls();
       bindDuplikatControls();
       loadDashboard(false);
 
@@ -715,18 +898,36 @@
           state.allSiswa = data.siswaRows || [];
           applyLocalFilters();
 
-          // Setiap bagian dibungkus try/catch sendiri-sendiri: kalau satu
-          // bagian gagal (mis. Chart.js dari CDN gagal dimuat / diblokir
-          // jaringan), bagian lain tetap jalan normal alih-alih ikut berhenti.
-          try { renderKecamatan(data); } catch (err) { console.error('renderKecamatan gagal:', err); }
-          try { renderRekap('hasil'); } catch (err) { console.error('renderRekap gagal:', err); }
+          // Tunggu Chart.js (dan cadangannya) selesai dicoba dimuat SEBELUM
+          // menggambar grafik apa pun. Ini mencegah "ReferenceError: Chart is
+          // not defined" yang muncul kalau google.script.run selesai lebih
+          // cepat daripada <script> Chart.js dari CDN (mis. saat data sudah
+          // ke-cache di server sehingga responsnya sangat cepat).
+          window.__libsReady.then(function (failedLibs) {
+            if (failedLibs && failedLibs.indexOf('Chart.js') !== -1) {
+              toast('Grafik tidak bisa ditampilkan: pustaka Chart.js gagal dimuat dari semua CDN (kemungkinan diblokir jaringan/firewall).', 'error');
+              console.error('Chart.js gagal dimuat dari cdnjs, jsdelivr, maupun unpkg. Grafik dilewati.');
+            }
+            if (failedLibs && failedLibs.indexOf('SheetJS (xlsx)') !== -1) {
+              console.warn('SheetJS (xlsx) gagal dimuat: fitur ekspor Excel mungkin tidak berfungsi.');
+            }
+
+            // Setiap bagian dibungkus try/catch sendiri-sendiri: kalau satu
+            // bagian gagal (mis. Chart.js dari CDN gagal dimuat / diblokir
+            // jaringan), bagian lain tetap jalan normal alih-alih ikut berhenti.
+            try { renderKecamatan(data); } catch (err) { console.error('renderKecamatan gagal:', err); }
+            try { renderRekap('hasil'); } catch (err) { console.error('renderRekap gagal:', err); }
+            try { renderAnalisisSiswa(data); } catch (err) { console.error('renderAnalisisSiswa gagal total:', err); }
+            console.log('[Analisis] data.analisisSiswa tersedia?', !!data.analisisSiswa, data.analisisSiswa);
+          });
 
           try {
-            state.allDuplikat = flattenDuplikat_(data.duplikatNik || []);
-            renderDuplikatStats(data.ringkasanDuplikat || { totalNikDuplikat: 0, totalSiswaDuplikat: 0 });
+            state.allDuplikatNik = flattenDuplikat_(data.duplikatNik || [], 'nik');
+            state.allDuplikatNisn = flattenDuplikat_(data.duplikatNisn || [], 'nisn');
+            renderDuplikatStats(data.ringkasanDuplikat || { totalNikDuplikat: 0, totalSiswaDuplikat: 0, totalNisnDuplikat: 0, totalSiswaDuplikatNisn: 0 });
             renderDuplikat('');
           } catch (err) {
-            console.error('Render Duplikat NIK gagal:', err);
+            console.error('Render Duplikat NIK/NISN gagal:', err);
           }
 
           toast(forceRefresh ? 'Data berhasil dimuat ulang.' : 'Data berhasil dimuat.', 'success');
@@ -1004,6 +1205,8 @@
           '<td>' + escapeHtml(r[SF.SEKOLAH]) + '</td>' +
           '<td>' + escapeHtml(r[SF.KECAMATAN] || '—') + '</td>' +
           '<td>' + escapeHtml(r[SF.JALUR] || '—') + '</td>' +
+          '<td>' + escapeHtml(r[SF.NIK] || '—') + '</td>' +
+          '<td>' + escapeHtml(r[SF.NISN] || '—') + '</td>' +
           '<td><span class="badge badge-neutral">' + escapeHtml(r[SF.UKBAJU] || '—') + '</span></td>' +
           '<td><span class="badge badge-neutral">' + escapeHtml(r[SF.UKCELANA] || '—') + '</span></td>' +
           '</tr>'
@@ -1023,6 +1226,8 @@
           'Sekolah': r[SF.SEKOLAH],
           'Kecamatan': r[SF.KECAMATAN],
           'Jalur': r[SF.JALUR],
+          'NIK': r[SF.NIK],
+          'NISN': r[SF.NISN],
           'Ukuran Baju': r[SF.UKBAJU],
           'Ukuran Celana': r[SF.UKCELANA]
         };
@@ -1038,15 +1243,16 @@
     // TAB DUPLIKAT NIK
     // ======================================================================
 
-    /** Ubah data.duplikatNik (array kelompok NIK) jadi array baris siswa
-     *  yang sudah "diratakan" (1 baris = 1 siswa), plus info kelompok
-     *  (nik, jumlah, groupIndex genap/ganjil) utk pewarnaan & filter. */
-    function flattenDuplikat_(groups) {
+    /** Ubah data.duplikatNik / data.duplikatNisn (array kelompok) jadi array
+     *  baris siswa yang sudah "diratakan" (1 baris = 1 siswa), plus info
+     *  kelompok (key, jumlah, groupIndex genap/ganjil) utk pewarnaan & filter.
+     *  keyField: 'nik' atau 'nisn' — nama field kunci grup pada tiap objek g. */
+    function flattenDuplikat_(groups, keyField) {
       const rows = [];
       groups.forEach(function (g, gi) {
         g.siswa.forEach(function (s) {
           rows.push({
-            nik: g.nik,
+            key: g[keyField],
             jumlah: g.jumlah,
             groupIndex: gi,
             namaSiswa: s.namaSiswa,
@@ -1055,6 +1261,7 @@
             namaSekolah: s.namaSekolah,
             kecamatan: s.kecamatan,
             jalur: s.jalur,
+            nik: s.nik,
             nisn: s.nisn
           });
         });
@@ -1067,13 +1274,40 @@
         renderDuplikat(e.target.value || '');
       }, 200));
       document.getElementById('btnExportDuplikat').addEventListener('click', exportDuplikatExcel);
+      document.getElementById('dupModeSelect').addEventListener('change', function (e) {
+        state.dupMode = e.target.value === 'nisn' ? 'nisn' : 'nik';
+        document.getElementById('searchDuplikat').value = '';
+        updateDuplikatModeLabels_();
+        renderDuplikatStats(state.dashboard ? state.dashboard.ringkasanDuplikat : null);
+        renderDuplikat('');
+      });
+    }
+
+    /** Perbarui judul/label/tombol di tab Duplikat sesuai mode aktif (NIK/NISN). */
+    function updateDuplikatModeLabels_() {
+      const isNisn = state.dupMode === 'nisn';
+      const label = isNisn ? 'NISN' : 'NIK';
+      document.getElementById('duplikatTitle').textContent = 'Siswa dengan ' + label + ' Duplikat';
+      document.getElementById('duplikatDesc').innerHTML =
+        'Menampilkan siswa yang ' + label + '-nya tercatat lebih dari satu kali pada sheet <b>Hasil</b>, agar dapat ditelusuri dan diverifikasi kebenarannya.';
+      document.getElementById('duplikatEmptyText').textContent =
+        'Tidak ditemukan ' + label + ' duplikat pada data saat ini. Semua ' + label + ' pada sheet Hasil unik. 🎉';
+      document.getElementById('searchDuplikatLabel').textContent = 'Cari ' + label + ' / Nama / Sekolah';
+      document.getElementById('searchDuplikat').placeholder = 'Ketik ' + label + ', nama siswa, atau nama sekolah…';
+      document.getElementById('btnExportDuplikatLabel').textContent = 'Unduh Excel (Daftar ' + label + ' Duplikat)';
     }
 
     function renderDuplikatStats(ringkasan) {
+      ringkasan = ringkasan || { totalNikDuplikat: 0, totalSiswaDuplikat: 0, totalNisnDuplikat: 0, totalSiswaDuplikatNisn: 0 };
+      const isNisn = state.dupMode === 'nisn';
+      const totalKey = isNisn ? (ringkasan.totalNisnDuplikat || 0) : (ringkasan.totalNikDuplikat || 0);
+      const totalSiswa = isNisn ? (ringkasan.totalSiswaDuplikatNisn || 0) : (ringkasan.totalSiswaDuplikat || 0);
+      const label = isNisn ? 'NISN' : 'NIK';
+
       const badge = document.getElementById('dupBadge');
       if (ringkasan.totalNikDuplikat > 0) {
         badge.style.display = 'inline-block';
-        badge.textContent = ringkasan.totalNikDuplikat;
+        badge.textContent = ringkasan.totalNikDuplikat; // badge navbar tetap mengacu ke NIK
       } else {
         badge.style.display = 'none';
       }
@@ -1081,8 +1315,8 @@
       const iconDup = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="12" height="12" rx="2.5"/><rect x="9" y="9" width="12" height="12" rx="2.5"/></svg>';
       const iconUsers = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H7a4 4 0 00-4 4v2"/><circle cx="10" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>';
       const cards = [
-        { icon: iconDup, cls: ringkasan.totalNikDuplikat > 0 ? 'icon-red' : 'icon-green', value: ringkasan.totalNikDuplikat, label: 'NIK Terdeteksi Duplikat' },
-        { icon: iconUsers, cls: ringkasan.totalSiswaDuplikat > 0 ? 'icon-red' : 'icon-green', value: ringkasan.totalSiswaDuplikat, label: 'Total Baris Siswa Terdampak' }
+        { icon: iconDup, cls: totalKey > 0 ? 'icon-red' : 'icon-green', value: totalKey, label: label + ' Terdeteksi Duplikat' },
+        { icon: iconUsers, cls: totalSiswa > 0 ? 'icon-red' : 'icon-green', value: totalSiswa, label: 'Total Baris Siswa Terdampak' }
       ];
       document.getElementById('duplikatStatCards').innerHTML = cards.map(function (c) {
         return '<div class="stat-card">' +
@@ -1094,45 +1328,49 @@
     }
 
     function renderDuplikat(query) {
+      const isNisn = state.dupMode === 'nisn';
+      const label = isNisn ? 'NISN' : 'NIK';
+      const source = isNisn ? state.allDuplikatNisn : state.allDuplikatNik;
+
       const q = normalizeSearch_(query);
-      let rows = state.allDuplikat;
+      let rows = source;
       if (q) {
         rows = rows.filter(function (r) {
-          return normalizeSearch_(r.nik).indexOf(q) !== -1 ||
+          return normalizeSearch_(r.key).indexOf(q) !== -1 ||
             normalizeSearch_(r.namaSiswa).indexOf(q) !== -1 ||
             normalizeSearch_(r.namaSekolah).indexOf(q) !== -1;
         });
       }
 
-      const noDataAtAll = state.allDuplikat.length === 0;
+      const noDataAtAll = source.length === 0;
       document.getElementById('duplikatEmptyNote').style.display = noDataAtAll ? 'flex' : 'none';
       document.getElementById('duplikatCard').style.display = noDataAtAll ? 'none' : 'block';
 
-      const totalNik = state.dashboard && state.dashboard.ringkasanDuplikat
-        ? state.dashboard.ringkasanDuplikat.totalNikDuplikat : 0;
+      const ringkasan = state.dashboard ? state.dashboard.ringkasanDuplikat : null;
+      const totalKey = ringkasan ? (isNisn ? ringkasan.totalNisnDuplikat : ringkasan.totalNikDuplikat) : 0;
       document.getElementById('duplikatCount').textContent =
-        totalNik + ' NIK duplikat ditemukan (' + rows.length + ' baris ditampilkan)';
+        (totalKey || 0) + ' ' + label + ' duplikat ditemukan (' + rows.length + ' baris ditampilkan)';
 
       document.getElementById('emptyDuplikatFilter').style.display = (!noDataAtAll && rows.length === 0) ? 'block' : 'none';
 
       const html = [];
-      let lastNik = null, alt = false, no = 0;
+      let lastKey = null, alt = false, no = 0;
       for (let i = 0; i < rows.length; i++) {
         const r = rows[i];
-        if (r.nik !== lastNik) { alt = !alt; lastNik = r.nik; }
+        if (r.key !== lastKey) { alt = !alt; lastKey = r.key; }
         no++;
         const jk = r.jenisKelamin === 'Laki-laki' ? 'L' : (r.jenisKelamin === 'Perempuan' ? 'P' : (r.jenisKelamin || '—'));
         html.push(
           '<tr class="' + (alt ? 'dup-row-a' : 'dup-row-b') + '">' +
           '<td>' + no + '</td>' +
-          '<td class="dup-nik">' + escapeHtml(r.nik) + '</td>' +
+          '<td class="' + (isNisn ? '' : 'dup-key') + '">' + escapeHtml(r.nik || '—') + '</td>' +
+          '<td class="' + (isNisn ? 'dup-key' : '') + '">' + escapeHtml(r.nisn || '—') + '</td>' +
           '<td>' + escapeHtml(r.namaSiswa) + '</td>' +
           '<td>' + jk + '</td>' +
           '<td>' + escapeHtml(r.jenjang || '—') + '</td>' +
           '<td>' + escapeHtml(r.namaSekolah) + '</td>' +
           '<td>' + escapeHtml(r.kecamatan || '—') + '</td>' +
           '<td>' + escapeHtml(r.jalur || '—') + '</td>' +
-          '<td>' + escapeHtml(r.nisn || '—') + '</td>' +
           '<td><span class="badge badge-kurang">' + r.jumlah + 'x</span></td>' +
           '</tr>'
         );
@@ -1145,25 +1383,29 @@
     }
 
     function exportDuplikatExcel() {
-      if (!state.allDuplikat.length) { toast('Tidak ada NIK duplikat untuk diekspor.', 'error'); return; }
-      const rows = state.allDuplikat.map(function (r, i) {
-        return {
+      const isNisn = state.dupMode === 'nisn';
+      const label = isNisn ? 'NISN' : 'NIK';
+      const source = isNisn ? state.allDuplikatNisn : state.allDuplikatNik;
+      if (!source.length) { toast('Tidak ada ' + label + ' duplikat untuk diekspor.', 'error'); return; }
+      const rows = source.map(function (r, i) {
+        const row = {
           'No': i + 1,
           'NIK': r.nik,
+          'NISN': r.nisn,
           'Nama Siswa': r.namaSiswa,
           'L/P': r.jenisKelamin,
           'Jenjang': r.jenjang,
           'Sekolah': r.namaSekolah,
           'Kecamatan': r.kecamatan,
-          'Jalur': r.jalur,
-          'NISN': r.nisn,
-          'Jumlah Kemunculan NIK': r.jumlah
+          'Jalur': r.jalur
         };
+        row['Jumlah Kemunculan ' + label] = r.jumlah;
+        return row;
       });
       const ws = XLSX.utils.json_to_sheet(rows);
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'NIK Duplikat');
-      XLSX.writeFile(wb, 'NIK_Duplikat_' + Date.now() + '.xlsx');
+      XLSX.utils.book_append_sheet(wb, ws, label + ' Duplikat');
+      XLSX.writeFile(wb, label + '_Duplikat_' + Date.now() + '.xlsx');
       toast('File Excel berhasil diunduh (' + rows.length.toLocaleString('id-ID') + ' baris).', 'success');
     }
 
@@ -1196,6 +1438,205 @@
             y: { beginAtZero: true, grid: { color: '#EAF3FC' } }
           }
         }
+      });
+    }
+
+    // ======================================================================
+    // TAB ANALISIS: L/P, UKURAN BAJU & CELANA, JUMLAH SISWA
+    // (Keseluruhan / Per Jenjang / Per Sekolah)
+    // ======================================================================
+    const GENDER_COLORS = { L: '#2E86D6', P: '#E85D9E' };
+
+    /** Urutkan kunci ukuran (baju/celana): angka lebih dulu secara numerik,
+     *  lalu teks non-angka diurutkan alfabet, "Tidak Diisi" selalu di akhir. */
+    function sortSizeKeys(keys) {
+      return keys.slice().sort(function (a, b) {
+        const na = Number(a), nb = Number(b);
+        const aNum = a !== 'Tidak Diisi' && a.trim() !== '' && !isNaN(na);
+        const bNum = b !== 'Tidak Diisi' && b.trim() !== '' && !isNaN(nb);
+        if (aNum && bNum) return na - nb;
+        if (aNum && !bNum) return -1;
+        if (!aNum && bNum) return 1;
+        if (a === 'Tidak Diisi') return 1;
+        if (b === 'Tidak Diisi') return -1;
+        return String(a).localeCompare(String(b));
+      });
+    }
+
+    function renderSizeTable(tbodyId, ukuranMap) {
+      const keys = sortSizeKeys(Object.keys(ukuranMap || {}));
+      const tbody = document.getElementById(tbodyId);
+      if (!keys.length) { tbody.innerHTML = '<tr><td colspan="2" style="text-align:center;color:var(--ink-soft);">Tidak ada data.</td></tr>'; return; }
+      tbody.innerHTML = keys.map(function (k) {
+        return '<tr><td>' + escapeHtml(k) + '</td><td>' + ukuranMap[k] + '</td></tr>';
+      }).join('');
+    }
+
+    function renderSizeChart(chartKey, canvasId, ukuranMap, color) {
+      const keys = sortSizeKeys(Object.keys(ukuranMap || {}));
+      const values = keys.map(function (k) { return ukuranMap[k]; });
+      const ctx = document.getElementById(canvasId).getContext('2d');
+      if (state.charts[chartKey]) state.charts[chartKey].destroy();
+      state.charts[chartKey] = new Chart(ctx, {
+        type: 'bar',
+        data: { labels: keys, datasets: [{ data: values, backgroundColor: color, borderRadius: 6, maxBarThickness: 34 }] },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: { y: { beginAtZero: true, grid: { color: '#EAF3FC' } }, x: { grid: { display: false }, ticks: { font: { family: 'Inter', size: 11 } } } }
+        }
+      });
+    }
+
+    function makeStatCardHtml(icon, cls, value, label) {
+      return '<div class="stat-card">' +
+        '<div class="stat-card__top"><div class="stat-card__icon ' + cls + '">' + icon + '</div></div>' +
+        '<div class="stat-card__value">' + value + '</div>' +
+        '<div class="stat-card__label">' + escapeHtml(label) + '</div>' +
+        '</div>';
+    }
+
+    const genderIconL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-3.5 3.5-6 8-6s8 2.5 8 6"/></svg>';
+    const genderIconP = genderIconL;
+    const usersIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H7a4 4 0 00-4 4v2"/><circle cx="10" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>';
+
+    function bindAnalisisScopeToggle() {
+      document.getElementById('analisisScopeToggle').addEventListener('click', function (e) {
+        const btn = e.target.closest('button');
+        if (!btn) return;
+        document.querySelectorAll('#analisisScopeToggle button').forEach(function (b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        ['keseluruhan', 'jenjang', 'sekolah'].forEach(function (s) {
+          document.getElementById('analisisScope' + s.charAt(0).toUpperCase() + s.slice(1)).style.display = (s === btn.dataset.scope) ? '' : 'none';
+        });
+      });
+    }
+
+    function renderAnalisisSiswa(data) {
+      const a = data.analisisSiswa;
+      if (!a) {
+        console.warn('renderAnalisisSiswa: data.analisisSiswa tidak ditemukan. Pastikan Code.gs versi terbaru sudah ter-deploy, lalu klik tombol ↻ Muat Ulang.');
+        document.getElementById('analisisKeseluruhanCards').innerHTML =
+          '<div class="empty-state" style="grid-column:1/-1;">Data analisis belum tersedia. Klik tombol ↻ "Muat Ulang" di navbar, lalu coba lagi. Jika masih kosong, pastikan Code.gs versi terbaru sudah di-deploy.</div>';
+        return;
+      }
+
+      // -------- KESELURUHAN --------
+      try {
+        const k = a.keseluruhan;
+        document.getElementById('analisisKeseluruhanCards').innerHTML =
+          makeStatCardHtml(usersIcon, 'icon-blue', k.totalSiswa, 'Total Siswa (Keseluruhan)') +
+          makeStatCardHtml(genderIconL, 'icon-blue', k.totalL, 'Total Laki-laki') +
+          makeStatCardHtml(genderIconP, 'icon-red', k.totalP, 'Total Perempuan');
+      } catch (err) { console.error('Analisis Keseluruhan (kartu) gagal:', err); }
+
+      try {
+        const k = a.keseluruhan;
+        const ctxGenderK = document.getElementById('chartGenderKeseluruhan').getContext('2d');
+        if (state.charts.genderKeseluruhan) state.charts.genderKeseluruhan.destroy();
+        state.charts.genderKeseluruhan = new Chart(ctxGenderK, {
+          type: 'doughnut',
+          data: { labels: ['Laki-laki', 'Perempuan'], datasets: [{ data: [k.totalL, k.totalP], backgroundColor: [GENDER_COLORS.L, GENDER_COLORS.P], borderWidth: 2, borderColor: '#fff' }] },
+          options: { responsive: true, maintainAspectRatio: false, cutout: '65%', plugins: { legend: { position: 'bottom', labels: { font: { family: 'Inter', size: 11.5 } } } } }
+        });
+      } catch (err) { console.error('Analisis Keseluruhan (grafik L/P) gagal:', err); }
+
+      try {
+        renderSizeChart('bajuKeseluruhan', 'chartBajuKeseluruhan', a.keseluruhan.ukBaju, '#2E86D6');
+      } catch (err) { console.error('Grafik ukuran baju (keseluruhan) gagal:', err); }
+      try {
+        renderSizeTable('tbodyBajuKeseluruhan', a.keseluruhan.ukBaju);
+      } catch (err) { console.error('Tabel ukuran baju (keseluruhan) gagal:', err); }
+      try {
+        renderSizeChart('celanaKeseluruhan', 'chartCelanaKeseluruhan', a.keseluruhan.ukCelana, '#E2A93B');
+      } catch (err) { console.error('Grafik ukuran celana (keseluruhan) gagal:', err); }
+      try {
+        renderSizeTable('tbodyCelanaKeseluruhan', a.keseluruhan.ukCelana);
+      } catch (err) { console.error('Tabel ukuran celana (keseluruhan) gagal:', err); }
+
+      // -------- PER JENJANG --------
+      const perJenjang = a.perJenjang || [];
+      try {
+        const ctxGenderJ = document.getElementById('chartGenderJenjang').getContext('2d');
+        if (state.charts.genderJenjang) state.charts.genderJenjang.destroy();
+        state.charts.genderJenjang = new Chart(ctxGenderJ, {
+          type: 'bar',
+          data: {
+            labels: perJenjang.map(function (j) { return j.jenjang; }),
+            datasets: [
+              { label: 'Laki-laki', data: perJenjang.map(function (j) { return j.totalL; }), backgroundColor: GENDER_COLORS.L, borderRadius: 6, maxBarThickness: 40 },
+              { label: 'Perempuan', data: perJenjang.map(function (j) { return j.totalP; }), backgroundColor: GENDER_COLORS.P, borderRadius: 6, maxBarThickness: 40 }
+            ]
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { position: 'bottom', labels: { font: { family: 'Inter', size: 11.5 } } } },
+            scales: { y: { beginAtZero: true, grid: { color: '#EAF3FC' } }, x: { grid: { display: false } } }
+          }
+        });
+      } catch (err) { console.error('Grafik L/P per jenjang gagal:', err); }
+
+      try {
+        document.getElementById('tbodyJenjangRingkas').innerHTML = perJenjang.map(function (j) {
+          return '<tr><td>' + escapeHtml(j.jenjang) + '</td><td>' + j.totalSiswa + '</td><td>' + j.totalL + '</td><td>' + j.totalP + '</td></tr>';
+        }).join('') || '<tr><td colspan="4" style="text-align:center;color:var(--ink-soft);">Tidak ada data.</td></tr>';
+      } catch (err) { console.error('Tabel ringkas per jenjang gagal:', err); }
+
+      try {
+        document.getElementById('jenjangUkuranCards').innerHTML = perJenjang.map(function (j, idx) {
+          return '<div class="card">' +
+            '<div class="card__head"><h3>Rekap Ukuran Baju &amp; Celana — Jenjang ' + escapeHtml(j.jenjang) + '</h3>' +
+            '<div class="sub">' + j.totalSiswa + ' siswa · ' + j.totalL + ' Laki-laki · ' + j.totalP + ' Perempuan</div></div>' +
+            '<div class="charts-grid">' +
+            '<div class="table-wrap"><table><thead><tr><th>Ukuran Baju</th><th>Jumlah</th></tr></thead><tbody id="tbodyBajuJenjang' + idx + '"></tbody></table></div>' +
+            '<div class="table-wrap"><table><thead><tr><th>Ukuran Celana</th><th>Jumlah</th></tr></thead><tbody id="tbodyCelanaJenjang' + idx + '"></tbody></table></div>' +
+            '</div></div>';
+        }).join('') || '<div class="empty-state">Tidak ada data jenjang.</div>';
+        perJenjang.forEach(function (j, idx) {
+          renderSizeTable('tbodyBajuJenjang' + idx, j.ukBaju);
+          renderSizeTable('tbodyCelanaJenjang' + idx, j.ukCelana);
+        });
+      } catch (err) { console.error('Kartu ukuran per jenjang gagal:', err); }
+
+      // -------- PER SEKOLAH --------
+      try {
+        state.analisisPerSekolah = a.perSekolah || [];
+        fillSelect('selectAnalisisSekolah', state.analisisPerSekolah.map(function (s) { return s.namaSekolah; }), '— Pilih sekolah untuk lihat rincian ukuran —');
+        renderAnalisisSekolahTable('');
+        document.getElementById('cardDetailSekolah').style.display = 'none';
+      } catch (err) { console.error('Analisis per sekolah gagal:', err); }
+    }
+
+    function renderAnalisisSekolahTable(search) {
+      const rows = (state.analisisPerSekolah || []).filter(function (s) {
+        return !search || s.namaSekolah.toLowerCase().indexOf(search.toLowerCase()) !== -1;
+      });
+      document.getElementById('tbodySekolahRingkas').innerHTML = rows.map(function (s) {
+        return '<tr><td>' + escapeHtml(s.namaSekolah) + '</td><td>' + escapeHtml(s.kecamatan || '—') + '</td><td>' + escapeHtml(s.jenjang || '—') + '</td><td>' + s.totalSiswa + '</td><td>' + s.totalL + '</td><td>' + s.totalP + '</td></tr>';
+      }).join('');
+      document.getElementById('emptyAnalisisSekolah').style.display = rows.length ? 'none' : 'block';
+    }
+
+    function bindAnalisisSekolahControls() {
+      document.getElementById('searchAnalisisSekolah').addEventListener('input', debounce(function () {
+        renderAnalisisSekolahTable(this.value.trim());
+      }, 200));
+
+      document.getElementById('selectAnalisisSekolah').addEventListener('change', function () {
+        const nama = this.value;
+        const card = document.getElementById('cardDetailSekolah');
+        if (!nama) { card.style.display = 'none'; return; }
+        const s = (state.analisisPerSekolah || []).find(function (r) { return r.namaSekolah === nama; });
+        if (!s) { card.style.display = 'none'; return; }
+        card.style.display = 'block';
+        document.getElementById('detailSekolahTitle').textContent = s.namaSekolah;
+        document.getElementById('detailSekolahCards').innerHTML =
+          makeStatCardHtml(usersIcon, 'icon-blue', s.totalSiswa, 'Total Siswa') +
+          makeStatCardHtml(genderIconL, 'icon-blue', s.totalL, 'Laki-laki') +
+          makeStatCardHtml(genderIconP, 'icon-red', s.totalP, 'Perempuan');
+        renderSizeTable('tbodyBajuSekolah', s.ukBaju);
+        renderSizeTable('tbodyCelanaSekolah', s.ukCelana);
+        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       });
     }
 
